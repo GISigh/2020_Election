@@ -82,7 +82,7 @@
     
     <p>Figure 1: A map show the probability of Biden or Trump winning each state. Lighter shades depict closer races and darker shades more "sure things."</p>
 
-<p>I used an ARIMA model and some simple Bayesian Statistics to predict the November 3rd election. The model uses every poll available at 538 available here: 
+<p style="font-family:verdana" style="font-size:30px>I used an ARIMA model and some simple Bayesian Statistics to predict the November 3rd election. The model uses every poll available at 538 available here: 
 https://projects.fivethirtyeight.com/polls-page/president_polls.csv
     
 Since I don’t know anything about polls and which ones are good, I used 538’s poll ratings to derive a weighted mean for each day. I also weighted the average using a 30-day decay, which smarter people than me seem to think is a good decay function for elections. For missing dates, I used a simple interpolation and computed a 7-day rolling mean. I fed this data into the ARIMA model. 
