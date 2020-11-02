@@ -14,9 +14,14 @@ from pmdarima.arima import auto_arima
 import geopandas as gpd
 import json
 from bokeh.plotting import figure, output_file, save
-from bokeh.models import GeoJSONDataSource, LinearColorMapper, ColorBar,  SingleIntervalTicker
+from bokeh.models import GeoJSONDataSource, LinearColorMapper, ColorBar,  SingleIntervalTicker, Legend, Title
 from bokeh.palettes import brewer
+from bokeh.util.compiler import TypeScript
 from bokeh.io import show
+from matplotlib.dates import DateFormatter
+import matplotlib.dates as mdates
+
+
 # %% Read in CSV from 538 and run some basic exploration
 #read polling data for 538
 url = 'https://projects.fivethirtyeight.com/polls-page/president_polls.csv'
@@ -84,15 +89,6 @@ def exp_decay(days):
 
 def average_error(nobs, p=50.):
     return p*nobs**-.5
-
-# def weighted_mean(group):
-#     weights1 = group['poll_weights']
-#     weights2 = group['time_weight']
-#     return np.sum(weights1*weights2*group['pct']/(weights1*weights2).sum())
-#     # try:
-#     #     return (data * weights).sum() / weights.sum()
-#     # except ZeroDivisionError:
-#     #     return data.mean()
     
 def weighted_mean(group, pct, weights1, weights2):
     data = group[pct]
@@ -123,7 +119,11 @@ states = np.sort(dem.state.dropna().unique()).tolist()
 
 biden = {}
 trump = {}
-for i in states[0:3]: 
+trump_mean = []
+biden_mean = []
+biden_std = []
+trump_std = []
+for i in states: 
     if i == 'Nebraska CD-1' or i == 'Nebraska CD-2':
         pass
     else:
@@ -143,23 +143,20 @@ for i in states[0:3]:
         dem_temp = dem_temp.asfreq('D')
         dem_temp = dem_temp.interpolate()
         dem_temp = dem_temp.dropna()
-    
-        from matplotlib.dates import DateFormatter
-        import matplotlib.dates as mdates
-        
+
         # dem_temp = np.log(dem_temp)
         rolling_mean = dem_temp.rolling(window = 7).mean()
         rolling_std = dem_temp.rolling(window = 7).std()
         
-        with plt.style.context('fivethirtyeight'):
-            fig, ax = plt.subplots()
-            ax.plot(rolling_mean['Biden'], color = 'blue')
-            ax.plot(rolling_mean['Trump'], color = 'red')
-            ax.xaxis.set_major_locator(months)
-            plt.title(i)
-            plt.text(rolling_mean.index[-1], rolling_mean['Biden'][-1], round(rolling_mean['Biden'][-1], 1))
-            plt.text(rolling_mean.index[-1], rolling_mean['Trump'][-1], round(rolling_mean['Trump'][-1], 1))
-            plt.ylim((10,90))
+        # with plt.style.context('fivethirtyeight'):
+        #     fig, ax = plt.subplots()
+        #     ax.plot(rolling_mean['Biden'], color = 'blue')
+        #     ax.plot(rolling_mean['Trump'], color = 'red')
+        #     ax.xaxis.set_major_locator(months)
+        #     plt.title(i)
+        #     plt.text(rolling_mean.index[-1], rolling_mean['Biden'][-1], round(rolling_mean['Biden'][-1], 1))
+        #     plt.text(rolling_mean.index[-1], rolling_mean['Trump'][-1], round(rolling_mean['Trump'][-1], 1))
+        #     plt.ylim((10,90))
         
         rolling_mean = rolling_mean.dropna()
             
@@ -170,9 +167,11 @@ for i in states[0:3]:
         years_fmt = mdates.DateFormatter('%Y')
         
         date_form = DateFormatter("%m")
+        
         #length of test data
         last_poll = pd.to_datetime(test.index[-1])
         election = pd.to_datetime(datetime.date(2020, 11, 3))
+        
         #days unitl election
         days = election - last_poll
         days =int(days / np.timedelta64(1, 'D'))
@@ -196,6 +195,11 @@ for i in states[0:3]:
         
         biden[i] = predictions.Biden[-1]
         trump[i] = predictions.Trump[-1]
+        trump_mean.append(np.mean(rolling_mean['Trump']))
+        biden_mean.append(np.mean(rolling_mean['Biden']))
+        trump_std.append(np.std(rolling_mean['Trump']))
+        biden_std.append(np.std(rolling_mean['Biden']))
+        
         # with plt.style.context('fivethirtyeight'):
         #     fig, ax = plt.subplots()
         #     ax.plot(rolling_mean['Biden'][0:len(train)], color = 'blue')
@@ -217,14 +221,17 @@ for i in states[0:3]:
 #Create a dictionary of the results to add to dataframe
 per = pd.DataFrame.from_dict(biden, orient = 'index')
 per['Trump'] = trump.values()
-per = per.drop(['Maine CD-1', 'Maine CD-2'])
+# per = per.drop(['Maine CD-1', 'Maine CD-2'])a
 per.reset_index(inplace = True)
 per.columns = ['NAME', 'Biden', 'Trump']
+per['Trump_mean'] = trump_mean
+per['Biden_mean'] = biden_mean
+per['Trump_std'] = trump_std
+per['Biden_std'] = biden_std
+per.to_csv('temp.csv')
 
 #read in json files as geopandas
 geo = gpd.read_file("states_1.json")
-
-
 
 df = geo.merge(per, on='NAME')
 
@@ -236,8 +243,10 @@ df['diff'] = df.Biden - df.Trump
 priors.columns = ['NAME', 'Trump_prior', 'Biden_prior']
 df = df.merge(priors, on = 'NAME')
 
-# df3 = df
+df3 = df
+
 # %% Some rather simple Bayes
+
 
 df = df3
 df['Biden_likelihood'] = df.Biden/(df.Biden + df.Trump)
@@ -251,9 +260,25 @@ df['posterior_biden'] = round(df['mid_step_Biden']/(df['mid_step_Biden'] + df['m
 df['posterior_Trump'] = round(df['mid_step_Trump']/(df['mid_step_Biden'] + df['mid_step_Trump']) * 100,0)
 
 df['probs'] = df['posterior_biden'] - df['posterior_Trump']
-# df.posterior_biden
-# df.Biden_likelihood
+df.posterior_biden
+df.Biden_likelihood
 
+
+
+# # %% some fancier base with pymc3
+# with pm.Model():
+#     mu = pm.Normal("mu", mu=df['Biden_mean'][0], sigma=df['Biden_std'][0])
+#     x = pm.Normal('x', mu = mu, sigma = df['Biden_std'][0], observed = df['Biden_prior'][0])
+#     # trace = pm.sample(ndraws=1000, tune=1000, chains=2, cores=2, compute_convergence_checks = False)
+    
+# with pm.Model() as model:
+#         b = pm.Beta('b', alpha=1, beta=1)
+#         tr = pm.sample(100)
+
+# logp = x.logp
+# model_logps = np.array([logp(point) for point in trace.points()])
+
+# %%
 elec = pd.read_csv('electoral.csv')
 elec.columns = ['NAME', 'Vote']
 df = df.merge(elec, on = 'NAME')
@@ -288,14 +313,65 @@ df2['diff'] = df2.Biden - df2.Trump
 
 df2['probs'] = df2['diff']
 
+
+
+# %%
+def label_race (row):
+   if row['probs'] >= 0 and row['probs'] <= 10:
+      return 'Toss up'
+   if row['probs'] <= 0 and row['probs'] >= -10:
+      return 'Toss up'
+   if row['probs'] <= 25 and row['probs'] >= 10:
+      return 'Leans Biden'
+   if row['probs'] >= -25 and row['probs'] <= -10:
+      return 'Leans Trump'
+   if row['probs'] < -25:
+      return 'Likely Trump'
+   if row['probs'] > 25:
+      return 'Likely Biden'
+  
+def label_value (row):
+   if row['probs'] >= 0 and row['probs'] <= 10:
+      return 0
+   if row['probs'] <= 0 and row['probs'] >= -10:
+      return 0
+   if row['probs'] <= 25 and row['probs'] > 10:
+      return 50
+   if row['probs'] >= -25 and row['probs'] < -10:
+      return -50
+   if row['probs'] < -25:
+      return -100
+   if row['probs'] > 25:
+      return 100
+   
+df2['labels'] = df2.apply (lambda row: label_race(row), axis=1)
+df2['label_value'] = df2.apply (lambda row: label_value(row), axis=1)
+
+df2['x'] = df2.centroid.map(lambda p: p.x)
+df2['y'] = df2.centroid.map(lambda p: p.y)
+
 biden_vote = 3
 trump_vote = 0
-for i, row in df2.iterrows():
-    if row['Trump'] > row['Biden']:
-        trump_vote = trump_vote + row['Vote']
-    else:
-        biden_vote = biden_vote + row['Vote']
 
+biden_vote = df2['Vote'].where(df2['label_value'] > 10).sum()
+trump_vote = df2['Vote'].where(df2['label_value'] < -10).sum()
+tossup_vote = df2['Vote'].where(df2['labels'] == 'Toss up' ).sum()
+
+df2['x'] = df2['x'].where(df2['labels'] == 'Toss up')
+df2['y'] = df2['y'].where(df2['labels'] == 'Toss up')
+
+df2.loc[1, 'x'] = df2.loc[1, 'x'] + 49000
+df2.loc[1, 'y'] = df2.loc[1, 'y'] - 25000
+df2.loc[49, 'x'] = df2.loc[49, 'x'] - 10000
+
+df2.loc[18, 'x'] = df2.loc[18, 'x'] - 20000
+
+df2.loc[24, 'x'] = df2.loc[24, 'x'] - 25000
+df2.loc[24, 'y'] = df2.loc[24, 'y'] - 15000
+
+df2.loc[21, 'x'] = df2.loc[21, 'x'] - 35000
+
+# df2['Vote_string'] = df2['Vote'].astype(str) + " Electoral Votes"
 #Turn the merged data frame back into a json file  
 # %%
 merged_json = json.loads(df2.to_json())
@@ -304,21 +380,24 @@ json_data = json.dumps(merged_json)
 geosource = GeoJSONDataSource(geojson = json_data)
 
 #set the color palette 
-palette = brewer['RdBu'][10]
-palette = palette[::-1]
+palette = [ '#de2d26', '#fc9272','#fdb863', '#9ecae1', '#3182bd']
+# palette = palette[::-1]
 color_mapper = LinearColorMapper(palette = palette, low = -100, high =100,  nan_color = '#d9d9d9')
 # color_mapper = LinearColorMapper(field_name = df['diff'], palette=palette ,low=min(df['diff']) ,high=max(df['diff']))
 
 b_num = "Biden prediction: " + str(biden_vote) + " Electoral Votes"
 t_num = "Trump prediction: " + str(trump_vote) + " Electoral Votes"
-labels = {'0': "" ,'20': '', '40': '', "60": '', '80': b_num, 
-          '-20': '' ,'-40': '' , '-60' : '', '-80': t_num, '100' : "", '-100': ''}
-color_bar = ColorBar(color_mapper=color_mapper, width = 350, height = 10, ticker=SingleIntervalTicker(interval=20),
-                     border_line_color='white',location = (237,0), orientation ='horizontal', major_label_overrides = labels,
-                     major_tick_line_alpha = 0, major_label_text_font_size = '12pt', label_standoff=10)
+# 
+
+labels = {'0': "", '50' : '', '100' : '' , 
+          '-50' : '', '-100' : ''}
+
+color_bar = ColorBar(color_mapper=color_mapper, width = 0, height = 100,
+                     border_line_color='white',location = (100,50), orientation ='vertical', major_label_overrides = labels,
+                     major_tick_line_alpha = 0, major_label_text_font_size = '12pt', label_standoff=30)
 
 #Set the size and title of the graph
-p = figure(title = 'Election predictions October 29th, 2020', plot_width=800, plot_height=550,
+p = figure(title = 'Election outlook November 1, 2020', plot_width=800, plot_height=550,
           tooltips=[
          ("Name", "@NAME"),
          ("Biden Polling","@Biden" + "%"),
@@ -326,24 +405,61 @@ p = figure(title = 'Election predictions October 29th, 2020', plot_width=800, pl
          ( "Winning Probability Biden", "@posterior_biden" + "%"),
          ( "Winning Probability Trump", "@posterior_Trump" + "%")])
 
+
 #Makes it so there are no gird lines
 p.xgrid.grid_line_color = None
 p.ygrid.grid_line_color = None
 
-p.patches('xs','ys', source = geosource, fill_color = {'field':'probs', 'transform' : color_mapper},
-         line_color = 'white', line_width = .7, fill_alpha = 1)
+sub_title_1 = "Biden Electoral Votes: " + str(round(biden_vote)) + "     Trump Electoral Votes: " + str(round(trump_vote)) + "     Toss Up Electoral Votes: " + str(round(tossup_vote))
+
+p.add_layout(Title(text=sub_title_1, text_font_style="italic", text_font_size = '14pt'), 'above')
+
+p.patches('xs','ys', source = geosource,
+         line_color = 'white', line_width = 1, fill_alpha = 1, legend_label='Likely Trump', fill_color='#de2d26')
+p.patches('xs','ys', source = geosource,
+         line_color = 'white', line_width = 1, fill_alpha = 1, legend_label='Leans Trump', fill_color='#fc9272')
+p.patches('xs','ys', source = geosource,
+         line_color = 'white', line_width = 1, fill_alpha = 1, legend_label='Toss Up', fill_color='#fdb863')
+p.patches('xs','ys', source = geosource,
+         line_color = 'white', line_width = 1, fill_alpha = 1, legend_label='Leans Biden', fill_color='#9ecae1')
+p.patches('xs','ys', source = geosource,
+         line_color = 'white', line_width = 1, fill_alpha = 1, legend_label='Likely Biden', fill_color='#3182bd')
+
+p.patches('xs','ys', source = geosource, fill_color = {'field':'label_value' ,  'transform': color_mapper},
+         line_color = 'white', line_width = 1, fill_alpha = 1)
 
 
-p.add_layout(color_bar, 'below')
+# p.add_layout(color_bar, 'left')
 p.title.text_font_size = '16pt'
-p.xaxis.visible = False 
+p.xaxis.visible = False
 p.yaxis.visible = False
 
 p.toolbar.logo = None
 p.toolbar_location = None
 
+p.legend.border_line_alpha = 0
+p.legend.background_fill_alpha = 0
+
+p.legend.location = "top_right"
+
+p.legend.orientation = "horizontal"
+
+p.legend.label_text_font_size = "10pt"
+
+labels = LabelSet(
+            x='x',
+            y='y',
+            text='Vote',
+            level='glyph',
+            x_offset=-5, 
+            y_offset=-10, 
+            source=geosource, 
+            render_mode='css', text_color = 'white')
+
+p.add_layout(labels)
+
 show(p)
-output_file("election_oct29_error_plus5Trump.html")
+output_file("election.html")
 save(p)
 
 
